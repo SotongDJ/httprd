@@ -107,6 +107,15 @@ async fn handle_request(State(state): State<Arc<AppState>>, req: Request) -> Res
     let method   = req.method().as_str().to_owned();
     let headers  = req.headers().clone();
 
+    if method != "GET" && method != "HEAD" {
+        return Response::builder()
+            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .header(header::ALLOW, "GET, HEAD")
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from("405 Method Not Allowed"))
+            .unwrap();
+    }
+
     // Percent-decode the URI path then build a sandboxed filesystem path.
     let decoded = percent_decode_str(&uri_path)
         .decode_utf8_lossy()
@@ -269,7 +278,12 @@ async fn generate_listing(dir: &Path, uri_path: &str) -> Response {
     }
 
     out.push_str("</pre>\n<hr>\n</body>\n</html>\n");
-    Html(out).into_response()
+    let mut resp = Html(out).into_response();
+    resp.headers_mut().insert(
+        "content-security-policy",
+        "default-src 'none'; style-src 'unsafe-inline'".parse().unwrap(),
+    );
+    resp
 }
 
 // ── file serving (full + range) ──────────────────────────────────────────────
@@ -309,7 +323,8 @@ async fn serve_file(
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, &content_type)
         .header(header::CONTENT_LENGTH, file_size)
-        .header(header::ACCEPT_RANGES, "bytes");
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header("x-content-type-options", "nosniff");
 
     if method == "HEAD" {
         return builder.body(Body::empty()).unwrap();
@@ -341,7 +356,8 @@ async fn serve_range(
             header::CONTENT_RANGE,
             format!("bytes {}-{}/{}", start, end, file_size),
         )
-        .header(header::ACCEPT_RANGES, "bytes");
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header("x-content-type-options", "nosniff");
 
     if method == "HEAD" {
         return builder.body(Body::empty()).unwrap();
