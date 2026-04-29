@@ -9,7 +9,6 @@ use clap::Parser;
 use humansize::{format_size, BINARY};
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, CONTROLS};
 use std::{
-    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::Arc,
     time::SystemTime,
@@ -187,24 +186,45 @@ async fn generate_listing(dir: &Path, uri_path: &str) -> Response {
     };
 
     struct Entry {
-        name:     String,
-        is_dir:   bool,
-        size:     u64,
-        mode:     u32,
-        modified: SystemTime,
-        nlink:    u64,
+        name:      String,
+        is_dir:    bool,
+        size:      u64,
+        mode_str:  String,
+        modified:  SystemTime,
+        nlink_str: String,
     }
 
     let mut entries: Vec<Entry> = Vec::new();
     while let Ok(Some(de)) = rd.next_entry().await {
         let name = de.file_name().to_string_lossy().into_owned();
         if let Ok(m) = de.metadata().await {
+            let is_dir = m.is_dir();
+
+            #[cfg(unix)]
+            let mode_str = {
+                use std::os::unix::fs::PermissionsExt;
+                fmt_mode(m.permissions().mode(), is_dir)
+            };
+            #[cfg(not(unix))]
+            let mode_str = {
+                let rw = if m.permissions().readonly() { "r--r--r--" } else { "rw-rw-rw-" };
+                format!("{}{}", if is_dir { 'd' } else { '-' }, rw)
+            };
+
+            #[cfg(unix)]
+            let nlink_str = {
+                use std::os::unix::fs::MetadataExt;
+                m.nlink().to_string()
+            };
+            #[cfg(not(unix))]
+            let nlink_str = "-".to_string();
+
             entries.push(Entry {
-                is_dir:   m.is_dir(),
-                size:     m.len(),
-                mode:     m.permissions().mode(),
-                modified: m.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-                nlink:    m.nlink(),
+                is_dir,
+                size:      m.len(),
+                mode_str,
+                modified:  m.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+                nlink_str,
                 name,
             });
         }
@@ -252,7 +272,6 @@ async fn generate_listing(dir: &Path, uri_path: &str) -> Response {
     }
 
     for e in &entries {
-        let mode_str = fmt_mode(e.mode, e.is_dir);
         let size_str = if e.is_dir {
             "-".to_string()
         } else {
@@ -273,7 +292,7 @@ async fn generate_listing(dir: &Path, uri_path: &str) -> Response {
 
         out.push_str(&format!(
             "{:<10}  {:>4}  {:>9}  {:<17}  <a href=\"{}\">{}</a>\n",
-            mode_str, e.nlink, size_str, time_str, href, display,
+            e.mode_str, e.nlink_str, size_str, time_str, href, display,
         ));
     }
 
@@ -417,6 +436,7 @@ fn parse_range(range_str: &str, file_size: u64) -> Option<(u64, u64)> {
 
 // ── formatting helpers ───────────────────────────────────────────────────────
 
+#[cfg(unix)]
 fn fmt_mode(mode: u32, is_dir: bool) -> String {
     const BITS: [(u32, char); 9] = [
         (0o400, 'r'), (0o200, 'w'), (0o100, 'x'),
