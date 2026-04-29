@@ -40,7 +40,7 @@ const PATH_SEGMENT: &AsciiSet = &CONTROLS
     .add(b'&');
 
 #[derive(Parser)]
-#[command(name = "httprd", about = "HTTP file server with resumable-download support")]
+#[command(name = "httprd", version, about = "HTTP file server with resumable-download support")]
 struct Args {
     /// Port to listen on
     #[arg(short, long, default_value = "8080")]
